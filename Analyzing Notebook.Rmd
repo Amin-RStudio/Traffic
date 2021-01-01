@@ -1,0 +1,584 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+In this project I analyze traffic data from Bloomington in the USA. I focused on
+Data visualisation, feature engeneering and trying to give advice for the city in
+order to improve the traffic situation. 
+
+I goot the traffic data from data.gov
+
+```{r}
+library(rio)
+library(tidyverse)
+library(caret)
+```
+
+```{r}
+#read data
+traffic <- import("Traffic_dataset.csv")
+traffic <- as_tibble(traffic)
+traffic
+options(dplyr.width = Inf)
+```
+
+```{r}
+#change column names
+traffic <- traffic %>% 
+  select(Id = `Master Record Number`, Year, Month, Day, Weekend = `Weekend?`, Hour, Collision_Type = `Collision Type`,
+         Injury_Type = `Injury Type`, Primary_Factor = `Primary Factor`, Location = Reported_Location, Latitude, Longitude)
+```
+
+Data Description:
+
+Id = Id, primary Key
+Year = year of accident
+Month = Month of accident 
+day = day of accident 
+weekend = weekend or not 
+Hour = Hour of accident 
+Collision_Type = Type of collision 
+Injury Type  = Type of injury 
+primary_Factor = What was the reason that let the accident happen 
+Location = Where did it happen? 
+Latitude 
+Longutude
+
+#Hour, Latitude and Logitude have NA Columns
+```{r}
+#Na check
+sapply(traffic, function(x) sum(is.na(x)))
+
+```
+
+#Feature Engineering
+```{r}
+#Variable check
+traffic %>% 
+  glimpse()
+```
+I will change some variables to better data types
+```{r}
+#changing Hour variable into a factor 
+traffic$Hour <- as.factor(traffic$Hour)
+traffic
+#changing Id into factor
+traffic$Id <- as.factor(traffic$Id)
+#changing year,month, day into factor
+traffic$Month <- as.factor(traffic$Month)
+traffic$Day <- as.factor(traffic$Day)
+traffic$Year <- as.factor(traffic$Year)
+
+```
+
+#Visualization
+```{r}
+#In which year are most of the accidents?
+ggplot(traffic, aes(Year)) + # all years are equivalent 
+  geom_bar()
+#We can clearly see, that the data has a timespan from 2003-2015. 
+#Although there are some diffirences, the accident rate is overall around equal
+```
+
+```{r}
+#In which month?
+ggplot(traffic, aes(Month, fill = Year)) + 
+#overall in month 10 (people have still summer wheels and forgot to change them) the most and in month 6 the least
+  geom_bar() +
+  facet_grid("Year")  #Differences between years
+```
+
+```{r}
+#In which Hour are the most accidents?
+ggplot(traffic, aes(Hour)) +
+  geom_bar()+ 
+  coord_cartesian(c(0,24))#18:00 are the most accidents --> people are coming from work to home
+#In which day? 
+ggplot(traffic, aes(Day)) +
+  geom_bar(aes(fill = Year), color = "black") #Overall the most accidents have been on Saturday (surprisingly)
+```
+
+```{r}
+#Check the Weekend
+q <- ifelse(traffic$Day == 1 & traffic$Weekend == "Weekend", T, F)
+traffic[-q,] #Surprisingly 1 did not mean "Monday" because their are "Weekdays" and "Weekends" with the factor 1. I would concloud that the Data is a bit messi. So I will fix it.
+
+#Because the "Weekend" Information is in "Day" (Day 6 & 7 are always Weekends) I can delete that column from the Dataset
+traffic <- traffic %>% 
+  select(-Weekend)
+```
+
+#Fixing the NA´s 
+```{r}
+sapply(traffic, function(x) sum(is.na(x)))
+
+```
+
+#NA-Hour
+```{r}
+traffic %>% 
+  filter(is.na(Hour))
+ggplot(traffic, aes(Collision_Type)) +  #Analyzing with Collision Type
+         geom_bar(aes(fill = Hour), color = "black") #No pattern exist
+
+ggplot(traffic, aes(Location)) +  #Analyzing with Location
+  geom_bar(aes(fill = Hour), color = "black") #Too many 
+
+#Filtering all Location that have more than 150 accidents 
+traffic %>% 
+  group_by(Location) %>% 
+  count(Location) %>% 
+  filter(n >= 150)
+#Visualizing
+a <- traffic %>% 
+  filter(Location == "3RD ST"| Location == "E 10TH ST"| Location == "E 3RD ST"| Location == "S WALNUT ST"| 
+           Location == "SR37N & VERNAL"| Location == "W 3RD ST") #filtering the most frequent variables
+ggplot(a, aes(Location, fill = Hour)) +
+  geom_bar(color = "black")
+#replacing Hour
+traffic$Hour <- ifelse(traffic$Location == "3RD ST" & is.na(traffic$Hour), 1500,traffic$Hour)
+#Their are just 225 NA in Hour. Compared to 53000 rows, that isnt a large amount.  So there is no need to Analyze each type of accident in detail. Therefore we will take the most common accident-Time, which is 18:00. 
+traffic %>% 
+  group_by(Hour) %>% 
+  count() %>% 
+  filter(n > 3000)
+traffic <- traffic %>% 
+  replace_na(list(Hour = 1700))
+```
+After we fixed the "Hour" column, we will focuse on the latitude and longitude
+#Latitude 
+```{r}
+#Which Locations have NA-Latitudes?
+LocationNA <- traffic %>% 
+  filter(is.na(Latitude)) %>% 
+  group_by(Location) %>% 
+  summarise() %>% 
+  print(n = 100)
+#Furthermore, all Locations with an NA are only available once 
+traffic %>% 
+  filter(is.na(Latitude)) %>% 
+  group_by(Location) %>% 
+  count(Location) %>% 
+  arrange(desc(Location)) 
+
+#Latitude for each Location
+traffic %>% 
+  filter(Location == "WALNUT & WINSLOW") %>% 
+  select(Latitude)
+#Because of the repitition its is better to write a function here: 
+LatiFunc <- function(x) {
+  traffic %>% 
+    filter(Location == x) %>% 
+    select(Latitude)
+}
+#testing function
+LatiFunc("WALNUT & WINSLOW") #works perfect
+#filling Walnut & Winslow
+traffic[is.na(traffic$Latitude) & traffic$Location == "WALNUT & WINSLOW", "Latitude"] <- 39.1
+
+#17TH & LISMORE
+LatiFunc("17TH & LISMORE") #hat nur ein NA --> aufheben für später (MARKIERT ALS "ARGH")
+#2ND & COLLEGE MALL
+LatiFunc("2ND & COLLEGE MALL") #replacing NA and fixing wrong 0 value
+traffic[is.na(traffic$Latitude) & traffic$Location == "2ND & COLLEGE MALL", "Latitude"] <- 39.2
+traffic[traffic$Latitude == 0 & traffic$Location == "2ND & COLLEGE MALL", "Latitude"] <- 39.2
+#3RD & BALLANTINE
+LatiFunc("3RD & BALLANTINE")
+traffic[is.na(traffic$Latitude) & traffic$Location == "3RD & BALLANTINE", "Latitude"] <- 39.2
+#3RD & HAWTHORNE
+LatiFunc("3RD & HAWTHORNE")
+traffic[is.na(traffic$Latitude) & traffic$Location == "3RD & HAWTHORNE", "Latitude"] <- 39.2
+#3RD & LIBERTY
+LatiFunc("3RD & LIBERTY")
+traffic[is.na(traffic$Latitude) & traffic$Location == "3RD & LIBERTY", "Latitude"] <- 39.2
+traffic$Latitude
+
+#I could go on and fill out the rest of the NA's like this. However, because there are hardly any deviations in latitude the location can contains smaller deviations anyway due to its length or measurement inaccuracies, the filling with the mean value will not have a negative effect on the data set. The 0 values are much more important.
+traffic %>%
+  filter(!is.na(Latitude)) %>% 
+  summarise(mean(Latitude)) #Here we have to filter the 0-values out, to get an accurate mean.
+
+#Because of Bloomington Location as a city in the USA it has to have a Longitude
+#of 38/39.
+#There are some values which have a Longitude under 38. Thats a problem because
+#its not in the range of bloomington. Maybe there is a mistake in the date or 
+#they the dataset includes data from the state indiana in general. Because its 
+#difficult to find that out (because i am living in germany :D) i will correct 
+#the dataset as follows:
+traffic %>% 
+  filter(Latitude <= 38 & Latitude == 0.00000) 
+traffic %>% 
+  filter(Latitude >= 38 & Latitude != 0.00000) %>% 
+  summarise(mean(Latitude)) #The mean is 39.2, so lets fill this value into the NA's
+
+#Filling NA's with mean
+traffic <- traffic %>% 
+  replace_na(list(Latitude = 39.2))
+#All Vakues which are undr 38 will be set as the mean too.
+traffic[traffic$Latitude <= 38, "Latitude"] <- 39.2
+#check
+traffic %>% 
+  filter(Latitude <= 38) #nice
+```
+
+#Longitude (Bloomingtons Longitude is -88 (searched in google)
+```{r}
+#NA´s in longitude 
+traffic %>% 
+  filter(is.na(Longitude)) %>% 
+  select(Location) %>% 
+  print(n = 100)
+
+#BLOOMFIELD & LIBERTY
+traffic %>% 
+  filter(Location == "BLOOMFIELD & LIBERTY") %>% 
+  select(Longitude, Latitude) #The Longitude is 0. That would mean, that this place in Bloomington is in Great Britain. Its obvious, that it cant be right, so i will change the Longitude to the real one found in the internet.
+traffic[traffic$Location == "BLOOMFIELD & LIBERTY", "Longitude"] <- -88
+
+#building function
+Longi <- function(x) {
+  traffic %>% 
+    filter(Location == x) %>% 
+    select(Longitude)
+}
+Longi("BLOOMFIELD & LIBERTY") #works nicely
+
+#DODDS & ROGERS 
+Longi("DODDS & ROGERS")
+traffic[traffic$Location == "DODDS & ROGERS", "Longitude"] <- -86.5
+
+#HARMONY
+Longi("HARMONY")
+traffic[traffic$Location == "HARMONY", "Longitude"] <- -88
+
+#ALLEN & PATTERSON
+Longi("ALLEN & PATTERSON")
+traffic[traffic$Location == "ALLEN & PATTERSON", "Longitude"] <- -86.5
+
+#2ND & LINCOLN
+Longi("2ND & LINCOLN")
+traffic[traffic$Location == "2ND & LINCOLN", "Longitude"] <- -86.5
+
+#FORREST PARK & SR46W
+Longi("FORREST PARK & SR46W")
+traffic[traffic$Location == "FORREST PARK & SR46W", "Longitude"] <- -86.6
+
+#RHORER & SARE
+Longi("RHORER & SARE")
+traffic[traffic$Location == "RHORER & SARE", "Longitude"] <- -86.5
+
+#CLUBHOUSE & KINSER
+Longi("CLUBHOUSE & KINSER")
+traffic[traffic$Location == "CLUBHOUSE & KINSER", "Longitude"] <- -88
+
+#SMITH
+Longi("SMITH")
+traffic[traffic$Location == "SMITH", "Longitude"] <- -88
+
+#WALNUT & WINSLOW
+Longi("WALNUT & WINSLOW")
+traffic[traffic$Location == "WALNUT & WINSLOW", "Longitude"] <- -86.5
+
+#BLOOMFIELD & PATTERSON
+Longi("BLOOMFIELD & PATTERSON")
+traffic[traffic$Location == "BLOOMFIELD & PATTERSON", "Longitude"] <- -88
+
+#2ND & COLLEGE MALL
+Longi("2ND & COLLEGE MALL")
+traffic[traffic$Location == "2ND & COLLEGE MALL", "Longitude"] <- -86.5
+
+#17TH & LISMORE
+Longi("17TH & LISMORE")
+traffic[traffic$Location == "17TH & LISMORE", "Longitude"] <- -88
+
+#CORY & THIRD
+Longi("CORY & THIRD")
+traffic[traffic$Location == "CORY & THIRD", "Longitude"] <- -86.6
+
+#3RD & BALLANTINE
+Longi("3RD & BALLANTINE")
+traffic[traffic$Location == "3RD & BALLANTINE", "Longitude"] <- -86.5
+
+#3RD & HAWTHORNE
+Longi("3RD & HAWTHORNE")
+traffic[traffic$Location == "3RD & HAWTHORN", "Longitude"] <- -86.5
+
+#PETE ELLIS
+Longi("PETE ELLIS")
+traffic[traffic$Location == "PETE ELLIS", "Longitude"] <- -86.5
+
+#3RD & HAWTHORNE
+Longi("3RD & HAWTHORNE")
+traffic[traffic$Location == "3RD & HAWTHORNE", "Longitude"] <- -86.5
+
+#VERMILYA & WALNUT
+Longi("3RD & LIBERTY")
+traffic[traffic$Location == "3RD & LIBERTY", "Longitude"] <- -86.6
+Longi("3RD & LIBERTY")
+traffic[traffic$Location == "3RD & LIBERTY", "Longitude"] <- -86.6
+Longi("ALLEN & TIMOTHY")
+traffic[traffic$Location == "ALLEN & TIMOTHY", "Longitude"] <- -86.6
+
+#All others have Longitude 86.5
+Longi("FAIRFAX & MCCORMICK")
+Longi("CANADA & SARE")
+Longi("LEONARD SPRINGS & SR45W")
+Longi("VERMILYA & WALNUT")
+Longi("BLUE SKY & FORREST PARK")
+Longi("SOUTHERN & WALNUT")
+Longi("3RD & SWAIN")
+Longi("DODDS & MADISON")
+Longi("OLD STATE ROAD 37 SOUTH & WEST CHUMLEY")
+traffic <- traffic %>% 
+  replace_na(list(Longitude = 86.5))
+
+#final NA check
+sapply(traffic, function(x) sum(is.na(x)))
+
+#NA Filling done :D
+#there are some "0" values, which have to be fixed
+traffic[traffic$Longitude == 0, "Longitude"] <- -86.5
+
+```
+Now we finished the data cleaning/engeneering part and did some data exploration. 
+Suruly we give advice to fix traffic in general. But we can fokus on the worst
+cases and see what we can do there.
+#Which Location has the most dangerous route/ the badest Injury_Type
+```{r}
+#Which injury typ exsist?
+ggplot(traffic, aes(x = Injury_Type)) +
+  geom_bar()
+
+#"Incapacitatig" and "fatal" are interesting for us, because we want to make driving car in Bloomington safer. Therefore we need to know the most unsafe locations
+trafficBad <- traffic %>% 
+  filter(Injury_Type == "Incapacitating" | Injury_Type ==  "Fatal")
+
+trafficBad %>% 
+  group_by(Location) %>% 
+  summarise() %>% 
+  print(n = Inf)
+#as we can see, we have one Location that is empty "". We have to fix that.
+
+```
+
+#Filling an empty "" value
+```{r}
+trafficBad %>% 
+  filter(Location == "") 
+trafficBad %>% 
+  group_by(Location) %>% 
+  summarise(count = n()) %>% 
+  summarise(total_number_of_Locations = sum(count))
+
+#since we have 1204 different Location we could try to build a multi label classifier. However, there is just one missig value in one row. Therefor its simply better to analyze the most common Locations with the Latidue and Longitude.
+trafficBad %>% 
+  group_by(Location) %>% 
+  summarise(count = n()) %>% 
+  arrange(desc(count))        #The most common Location has only a frequency of 8 
+```
+
+Because of the low frequency we will do a chi-square test to check, if there are correlations between the Location and the Collisions-Type
+Hypothesis: 
+#H1: There is a correlation between Location and Collisions-Type
+#H0: There is no correlation between Location and Collisions-Type
+```{r}
+kreuztabelle2 <- table(trafficBad$Location, trafficBad$Collision_Type)
+c2 <- chisq.test(kreuztabelle2, simulate.p.value = T)
+c2 #p-value < 5%; Therefore a correlation exists. 
+
+#We hae to check for "1-Car" because of the empty value.
+trafficBad %>% 
+  filter(Collision_Type == "1-Car") %>% 
+  group_by(Location) %>% 
+  summarise(count = n()) %>% 
+  arrange(desc(count)) %>% 
+  print(n = Inf) #4 "1-Car" Collisionstype in "HINDS & SR45W"
+
+#adding "HINDS & SR45W" for that type
+trafficBad[trafficBad$Id == 1807877, ] <- trafficBad %>% 
+                                              filter(Id == 1807877) %>% 
+                                              mutate(Location = "HINDS & SR45W")
+```
+
+
+```{r}
+#Checking all columns to see if there is any empty value
+sapply(trafficBad, function(x) sum(is.na(x))) #No Na
+#Mabe empty one like ""
+trafficBad %>% 
+  filter(Month == "")
+trafficBad %>% 
+  filter(Day == "")
+trafficBad %>% 
+  filter(Hour == "")
+trafficBad %>% 
+  filter(Collision_Type == "")
+trafficBad %>% 
+  filter(Injury_Type == "")
+trafficBad %>% 
+  filter(Primary_Factor == "") #Here are 4 empty values
+trafficBad %>% 
+  filter(Location == "")
+trafficBad %>% 
+  filter(Latitude == "")
+trafficBad %>% 
+  filter(Longitude == "")
+
+#Primary_Factor has 4 empty Values. Lets fill them up
+#How much Primary_Factors are there?
+trafficBad %>% 
+  group_by(Primary_Factor) %>% 
+  summarise(count = n()) %>% 
+  print(n = Inf)
+
+#Grouping Primary_Factor and Location together and filtering the Locations that are in the empty rows
+trafficBad %>% 
+  group_by(Primary_Factor,Location) %>% 
+  summarise(count = n()) %>% 
+  filter(Location == "E MORNINGSIDE & N SMITH" | Location == "ORCHARD & SR37" | 
+           Location == "HINES RD & SR45" | Location == "WALNUT ST")
+#Unfortunatly they are the  only Locations with such a Primary_Factor
+trafficBad %>% 
+  group_by(Primary_Factor, Injury_Type) %>% 
+  summarise(count = n()) %>% 
+  filter(Injury_Type == "Incapacitating") %>% 
+  arrange(desc(count)) %>% 
+  print(n = Inf) #The most exisiting Primary_Factor with an "Incapacitating" Injura-type is "FAILURE TO YIELD RIGHT OF WAY". I will use this to fill the roows up
+
+#filling
+trafficBad[trafficBad$Primary_Factor == "",] <- trafficBad %>% 
+  filter(Primary_Factor == "") %>% 
+  mutate(Primary_Factor = "FAILURE TO YIELD RIGHT OF WAY")
+```
+After a second Data Manipulating step, we can finally foyus o answering questions.
+
+Question on that we can answer with the data are for example:
+#Which Location is the most dangerous one?
+#Which Primary_Factor is the most tragic one compared to the Injury_type? 
+#Which Collasion type is the most common? At which Time? On which Month?
+#What can the city Bloomington do, to reduce there traffic the most dangerous traffic-crashs? 
+#Which time-period is given?
+
+```{r}
+#Which Location is the most dangerous one in case of numbers and injury_type?
+trafficBad %>% 
+  group_by(Location)  %>% 
+  summarise(number = n()) %>% 
+  filter(number > 3) #"SMITHVILLE & SR37S" hat 8 Unfälle registriert 
+
+trafficBad %>% 
+  filter(Location == "SMITHVILLE & SR37S" ) #All of them are Incapacitating 
+#Visualisierung 
+most_dangerous0 <- trafficBad %>% 
+  count(Location) %>% 
+  filter(n > 3) %>% 
+  pull(Location)
+
+mostdangerous <- trafficBad %>% 
+  filter(Location %in% most_dangerous0)
+
+ggplot(mostdangerous, aes(Location)) +
+  geom_bar(aes(fill = Location)) +
+  theme_dark() +
+  theme(axis.text.x = element_text(angle = 25, vjust = 1, hjust =1)) +
+  ylim(0,8) +
+  theme(legend.position = "none")
+#Conclusion: Maybe there should be more Safety measures in ares like "SMITHVILLE & SR446S"; "FULLERTON & SR37S"; HINDS & SR45W; "SR37N & VERNAL
+
+```
+
+#Which Primary_Factor is the most tragic one compared to the Injury_type? 
+```{r}
+worst_Primary_Factor <- trafficBad %>% 
+                            select(Primary_Factor, Injury_Type) %>% 
+                            filter(Injury_Type == "Incapacitating") %>% 
+                            group_by(Primary_Factor) %>% 
+                            summarise(number_of_Primary_Factor_Cases =n()) %>% 
+                            arrange(desc(number_of_Primary_Factor_Cases)) %>% 
+                            filter(number_of_Primary_Factor_Cases > 100) #As "incapacitating is the worst injury type, we have to flter the data set 
+#Visualisierung
+worst_Primary_Factor_vis <- trafficBad %>% 
+  select(Primary_Factor, Injury_Type) %>% 
+  filter(Injury_Type == "Incapacitating") %>% 
+  group_by(Primary_Factor) %>% 
+  summarise(number_of_Primary_Factor_Cases =n()) %>% 
+  arrange(desc(number_of_Primary_Factor_Cases)) %>% 
+  filter(number_of_Primary_Factor_Cases > 100) %>% 
+  pull(Primary_Factor)
+worst_Primary_Factor_vis <- trafficBad %>% 
+  filter(Primary_Factor %in% worst_Primary_Factor_vis)
+
+ggplot(worst_Primary_Factor_vis, aes(Primary_Factor)) +
+  geom_bar(fill = "salmon") +
+  theme_dark()
+```
+
+#Which Collasion type is the most common? At which Time? 
+```{r}
+trafficBad %>% 
+  group_by(Collision_Type) %>% 
+  count()  #2-Car Collision are the most common (with 482 total cases)
+#Vis 
+coll2 <- trafficBad %>% 
+  group_by(Collision_Type) %>% 
+  count() %>%  
+  pull(Collision_Type)
+
+visdata <- trafficBad %>% 
+  filter(Collision_Type %in% coll2)
+ggplot(visdata, aes(Collision_Type, fill = Collision_Type)) +
+  geom_bar() +
+  theme_dark() +
+  ggtitle("Most common Collision-Type")
+
+trafficBad %>% 
+  group_by(Hour) %>% 
+  count %>% 
+  filter(n > 20) %>% 
+  arrange(desc(n)) #Most commonly accidents happen on 18 Hour (first place) and 15 + 17 Hour (second Place)
+#Vis
+ggplot(trafficBad, aes(as.factor(Hour))) +
+  geom_bar() 
+#Changing "1700" to "17"
+trafficBad[trafficBad$Hour == 1700,"Hour"] <- 17
+#Vis again
+ggplot(trafficBad, aes(as.factor(Hour))) +
+  geom_bar(fill = "orange") +
+  theme_dark() +
+  labs(x = "Hour") +
+  ggtitle("Frequency distribution of accidents by time")
+
+#Month
+trafficBad %>% 
+  group_by(Month) %>% 
+  count %>% 
+  filter(n > 20) %>% 
+  arrange(desc(n))
+#Vis
+ggplot(trafficBad, aes(Month, fill = Month)) +
+  geom_bar() +
+  theme_dark() +
+  ggtitle("Most common month of accidents")
+#Year
+trafficBad %>% 
+  group_by(Year) %>% 
+  count %>% 
+  filter(n > 20) %>% 
+  arrange(desc(n))
+#Vis
+ggplot(trafficBad, aes(Year, fill = Year)) +
+  geom_bar() +
+  theme_dark() +
+  ggtitle("Most common Year of terrible accidents") #Its like an exponentiell graph. Future looks awefull if it is continueinh like this. Maybe Bloomington got more and more cars/people and has to improve there infrastructure
+#Time priod 2003-2015
+```
+
+Now: What can the city Bloomington do, to reduce the most dangerous traffic-crashs? 
+# Most of the accidents happened in October (due to lack of summer tires). Most very bad accidents happen between 3pm and 6pm
+# In 2015 the accident rate of "very bad car accidents" increased extremely (although, as stated at the beginning, the overall accident frequencies have not decreased). There may have been major problems with the infrastructure.
+# Most accidents are 2-car types. So there seems to be accidents due to a lack of infrastructure.
+#Recommendations: Reduce the pace. Expand the trams. Regulate intersections and roundabouts.
+# 'Failure to yield right of way' is the most common cause. It was not granted right before left.
+# Especially at intersections, additional signs should be added or violations of the rules on the right before left should be punished more
+# 'SMITHVILE & SR 37S has the most accidents. This place seems particularly dangerous. There may be crossings there that are not easy to spot.
+# Fortunately, most accidents are no injury and non incapacitating
